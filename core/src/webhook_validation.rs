@@ -36,7 +36,6 @@ use axum::{
     extract::{FromRequest, Request},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Extension,
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -79,7 +78,7 @@ where
 {
     type Rejection = WebhookValidationError;
 
-    async fn from_request(mut req: Request, state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         // 1. Resolve the shared secret: check Extensions, fallback to environment variable.
         let secret = if let Some(InboundWebhookSecret(s)) =
             req.extensions().get::<InboundWebhookSecret>().cloned()
@@ -230,7 +229,7 @@ impl IntoResponse for WebhookValidationError {
 mod tests {
     use super::*;
     use crate::webhooks::sign;
-    use axum::{body::Body, http::Request, routing::post, Router};
+    use axum::{body::Body, http::Request, routing::post, Extension, Router};
     use std::time::{SystemTime, UNIX_EPOCH};
     use tower::ServiceExt;
 

@@ -66,13 +66,13 @@ impl StateCache for MockCache {
         self.stored.get(key).cloned()
     }
     
-    async fn set(&self, key: &str, value: Vec<u8>) -> Result<(), CacheError> {
+    async fn set(&self, _key: &str, _value: Vec<u8>) -> Result<(), CacheError> {
         // In a real mock, we'd need mutability, but for tests we can use Arc<Mutex>
         // This is a simplified version
         Ok(())
     }
     
-    async fn invalidate(&self, key: &str) -> Result<(), CacheError> {
+    async fn invalidate(&self, _key: &str) -> Result<(), CacheError> {
         Ok(())
     }
 }

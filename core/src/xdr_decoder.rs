@@ -8,7 +8,6 @@ use soroban_sdk::xdr::{
     SorobanTransactionMeta, SorobanTransactionMetaExt, TransactionEnvelope, TransactionMeta,
     TransactionResultMeta,
 };
-use std::io::Cursor;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -122,6 +121,7 @@ pub struct XdrTransactionResultDecoder;
 
 impl XdrTransactionResultDecoder {
     /// Helper to decode base64 into raw bytes and then parse XDR with byte offset tracking.
+    #[allow(dead_code)]
     fn decode_xdr_base64<T: ReadXdr>(xdr: &str, kind: &'static str) -> Result<T, XdrDecodeError> {
         let trimmed = xdr.trim();
         let bytes = match BASE64.decode(trimmed.as_bytes()) {
@@ -140,14 +140,12 @@ impl XdrTransactionResultDecoder {
             }
         };
 
-        let mut cursor = Cursor::new(&bytes);
-        match T::read_xdr(&mut cursor, Limits::none()) {
+        match T::from_xdr(&bytes, Limits::none()) {
             Ok(val) => Ok(val),
             Err(source) => {
-                let offset = Some(cursor.position() as usize);
                 Err(XdrDecodeError::InvalidXdr {
                     kind,
-                    offset,
+                    offset: None,
                     message: format!("{source}"),
                     source: Some(source),
                 })
@@ -161,7 +159,9 @@ impl XdrTransactionResultDecoder {
             TransactionResultMeta::from_xdr_base64(xdr, Limits::none()).map_err(|source| {
                 XdrDecodeError::InvalidXdr {
                     kind: "transaction result metadata",
-                    source,
+                    offset: None,
+                    message: source.to_string(),
+                    source: Some(source),
                 }
             })?;
         let meta = soroban_meta(&result.tx_apply_processing)
@@ -175,7 +175,9 @@ impl XdrTransactionResultDecoder {
             SorobanTransactionMeta::from_xdr_base64(xdr, Limits::none()).map_err(|source| {
                 XdrDecodeError::InvalidXdr {
                     kind: "Soroban transaction metadata",
-                    source,
+                    offset: None,
+                    message: source.to_string(),
+                    source: Some(source),
                 }
             })?;
         Ok(Self::decode_soroban_meta(&meta))
@@ -187,7 +189,9 @@ impl XdrTransactionResultDecoder {
             TransactionEnvelope::from_xdr_base64(xdr, Limits::none()).map_err(|source| {
                 XdrDecodeError::InvalidXdr {
                     kind: "transaction envelope",
-                    source,
+                    offset: None,
+                    message: source.to_string(),
+                    source: Some(source),
                 }
             })?;
         Ok(decode_envelope(&envelope))

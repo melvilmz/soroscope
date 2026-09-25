@@ -45,7 +45,6 @@ use std::sync::Arc;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use rustls_pemfile::certs as read_cert_chain;
-use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
@@ -376,7 +375,7 @@ pub async fn serve_tls(addr: std::net::SocketAddr, bus: Arc<SimulationBus>, tls:
         "gRPC EventStreamService listening with TLS"
     );
 
-    let builder = match tonic::transport::Server::builder().tls_config(server_tls) {
+    let mut builder = match tonic::transport::Server::builder().tls_config(server_tls) {
         Ok(b) => b,
         Err(e) => {
             tracing::error!(error = %e, "invalid gRPC TLS server configuration");

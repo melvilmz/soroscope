@@ -847,8 +847,8 @@ mod fuzz_tests {
             let batch = tree.generate_proofs_batch(&indices).expect("batch ok");
             for (i, bp) in batch.iter().enumerate() {
                 let single = tree.generate_proof(i).expect("single ok");
-                prop_assert_eq!(bp.leaf_hash, single.leaf_hash, "leaf {i} hash mismatch");
-                prop_assert_eq!(bp.proof, single.proof, "leaf {i} proof path mismatch");
+                prop_assert_eq!(bp.leaf_hash, single.leaf_hash, "leaf {} hash mismatch", i);
+                prop_assert_eq!(&bp.proof, &single.proof, "leaf {} proof path mismatch", i);
             }
         }
     }

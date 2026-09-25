@@ -1,4 +1,3 @@
-```rust
 #![allow(dead_code)]
 
 mod auth;
@@ -6,6 +5,7 @@ mod benchmarks;
 mod cache;
 mod call_trace_parser;
 mod comparison;
+mod contract_registry;
 mod errors;
 pub mod fee_analytics;
 pub mod fee_collector;
@@ -16,7 +16,9 @@ mod graphql;
 pub mod insights;
 mod jobs;
 mod leader_lock;
+mod logging;
 mod merkle_tree;
+pub mod metrics;
 mod parser;
 mod routing;
 pub mod rpc_provider;
@@ -24,6 +26,7 @@ mod rpc_throttle;
 mod runner;
 mod simulation;
 mod simulation_service;
+mod sys_alarms;
 mod task_queue;
 mod trace_propagation;
 mod wasm_branch_analysis;
@@ -57,23 +60,13 @@ use axum::{
     Extension, Router,
 };
 use config::{Config, ConfigError};
-use prometheus::{Encoder, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder};
+use prometheus::{Encoder, TextEncoder};
 use serde::{Deserialize, Serialize};
 use simulation_service::{AnalysisResult, SimulationMetric, SimulationService};
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
-// CLI Argument Handling
-use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
-use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
-use crate::fee_store::FeeStore;
-use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
-use crate::insights::InsightsEngine;
-use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
-use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
-use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
-use crate::ws::SimulationBus;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
@@ -252,6 +245,7 @@ fn default_max_ledger_age() -> u32 {
 
 fn default_event_bus_capacity() -> usize {
     256
+}
 fn default_allowed_origins() -> String {
     // Empty string means: fall back to allow-all (*).
     // Operators set ALLOWED_ORIGINS=http://localhost:3000,https://app.example.com
@@ -453,123 +447,7 @@ pub struct AppState {
     /// WebSocket event bus for simulation jobs.
     simulation_bus: Arc<SimulationBus>,
 }
-
-#[derive(Clone)]
-pub(crate) struct AppMetrics {
-    registry: Registry,
-    simulation_latency_seconds: HistogramVec,
-    rpc_error_count_total: IntCounterVec,
-    simulation_requests_total: IntCounterVec,
-    resource_utilization_percent: prometheus::GaugeVec,
-    /// Host-wide CPU usage percentage (0–100) sampled by the system
-    /// alarm monitor (issue #592). Label keys are static so scrapers
-    /// see a single `local` series.
-    pub(crate) host_cpu_usage_percent: prometheus::GaugeVec,
-    /// Host-wide memory usage percentage (0–100) sampled by the
-    /// system alarm monitor (issue #592).
-    pub(crate) host_memory_usage_percent: prometheus::GaugeVec,
-    /// Resident memory size of the SoroScope process itself, in bytes.
-    pub(crate) process_memory_bytes: prometheus::GaugeVec,
-    /// Wall-clock time spent per indexing/collection cycle, by stage.
-    indexing_latency_seconds: HistogramVec,
-    /// Ledger events successfully processed, by stage.
-    events_processed_total: IntCounterVec,
-    /// Indexing cycle failures, by stage.
-    indexing_errors_total: IntCounterVec,
-    /// Depth of background job queues, by queue name.
-    job_queue_depth: prometheus::GaugeVec,
-}
-
-impl AppMetrics {
-    fn new() -> Result<Self, prometheus::Error> {
-        let registry = Registry::new();
-
-        let simulation_latency_seconds = HistogramVec::new(
-            prometheus::HistogramOpts::new(
-                "simulation_latency_seconds",
-                "Latency of simulation requests in seconds",
-            ),
-            &["endpoint"],
-        )?;
-        let rpc_error_count_total = IntCounterVec::new(
-            Opts::new(
-                "rpc_error_count_total",
-                "Total number of RPC and simulation errors",
-            ),
-            &["endpoint", "error_type"],
-        )?;
-        let simulation_requests_total = IntCounterVec::new(
-            Opts::new(
-                "simulation_requests_total",
-                "Total number of simulation requests by endpoint and cache status",
-            ),
-            &["endpoint", "cache_status"],
-        )?;
-        let resource_utilization_percent = prometheus::GaugeVec::new(
-            Opts::new(
-                "resource_utilization_percent",
-                "Resource utilization percentage from latest simulation sample",
-            ),
-            &["resource"],
-        )?;
-        let host_cpu_usage_percent = prometheus::GaugeVec::new(
-            Opts::new(
-                "host_cpu_usage_percent",
-                "Host-wide CPU usage percentage (0-100) sampled by the system alarm monitor",
-            ),
-            &["host"],
-        )?;
-        let host_memory_usage_percent = prometheus::GaugeVec::new(
-                "host_memory_usage_percent",
-                "Host-wide memory usage percentage (0-100) sampled by the system alarm monitor",
-        let process_memory_bytes = prometheus::GaugeVec::new(
-                "process_memory_bytes",
-                "Resident memory size of the SoroScope process in bytes",
-            &["process"],
-        let indexing_latency_seconds = HistogramVec::new(
-            prometheus::HistogramOpts::new(
-                "indexing_latency_seconds",
-                "Latency of ledger indexing/collection cycles in seconds",
-            &["stage"],
-        let events_processed_total = IntCounterVec::new(
-                "events_processed_total",
-                "Total number of ledger events successfully processed",
-        let indexing_errors_total = IntCounterVec::new(
-                "indexing_errors_total",
-                "Total number of indexing cycle failures",
-        let job_queue_depth = prometheus::GaugeVec::new(
-            Opts::new("job_queue_depth", "Current depth of background job queues"),
-            &["queue"],
-        )?;
-
-        registry.register(Box::new(simulation_latency_seconds.clone()))?;
-        registry.register(Box::new(rpc_error_count_total.clone()))?;
-        registry.register(Box::new(simulation_requests_total.clone()))?;
-        registry.register(Box::new(resource_utilization_percent.clone()))?;
-        registry.register(Box::new(host_cpu_usage_percent.clone()))?;
-        registry.register(Box::new(host_memory_usage_percent.clone()))?;
-        registry.register(Box::new(process_memory_bytes.clone()))?;
-        registry.register(Box::new(indexing_latency_seconds.clone()))?;
-        registry.register(Box::new(events_processed_total.clone()))?;
-        registry.register(Box::new(indexing_errors_total.clone()))?;
-        registry.register(Box::new(job_queue_depth.clone()))?;
-
-        Ok(Self {
-            registry,
-            simulation_latency_seconds,
-            rpc_error_count_total,
-            simulation_requests_total,
-            resource_utilization_percent,
-            host_cpu_usage_percent,
-            host_memory_usage_percent,
-            process_memory_bytes,
-            indexing_latency_seconds,
-            events_processed_total,
-            indexing_errors_total,
-            job_queue_depth,
-        })
-    }
-}
+use crate::metrics::AppMetrics;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct AnalyzeRequest {
@@ -635,6 +513,8 @@ pub struct TestnetAverages {
     /// Average CPU instructions for typical Soroban transactions
     pub cpu_instructions: u64,
     /// Average RAM bytes for typical Soroban transactions
+    pub ram_bytes: u64,
+    /// Average ledger read bytes for typical Soroban transactions
     pub ledger_read_bytes: u64,
     /// Average ledger write bytes for typical Soroban transactions
     pub ledger_write_bytes: u64,
@@ -1912,18 +1792,6 @@ async fn health_check() -> &'static str {
     "OK"
 }
 
-async fn healthz() -> StatusCode {
-    StatusCode::OK
-}
-
-async fn readyz(State(state): State<Arc<AppState>>) -> StatusCode {
-    let providers_healthy = !state.provider_registry.healthy_providers().await.is_empty();
-    let db_healthy = state.fee_store.get_sample_count().await.is_ok();
-    
-    if providers_healthy && db_healthy {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
 /// `/healthz` — Kubernetes liveness probe.
 ///
 /// Returns 200 OK as long as the process is running. No external dependency
@@ -1999,18 +1867,43 @@ async fn main() {
     // filtering without recompiling the binary.
     let config = load_config().expect("Failed to load configuration");
 
-    // ── Tracing init (#572: JSON format + x-request-id correlation) ────
-    let log_json = env::var("LOG_FORMAT").map(|v| v.to_lowercase() == "json").unwrap_or(false);
-    let filter = EnvFilter::from_default_env();
-    if log_json {
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(tracing_subscriber::fmt::layer().json())
-            .init();
-    } else {
-            .with(tracing_subscriber::fmt::layer())
+    // ── Tracing init (Issue #16: Structured JSON & Logfmt + RUST_LOG filter) ────
+    let log_format_str = env::var("LOG_FORMAT").unwrap_or_else(|_| {
+        if config.log_format_json {
+            "json".to_string()
+        } else {
+            "compact".to_string()
+        }
+    });
+    let log_format: crate::logging::LogFormat = log_format_str.parse().unwrap_or_default();
+    let filter = crate::logging::build_env_filter(&config.rust_log);
+
+    match log_format {
+        crate::logging::LogFormat::Json => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .json()
+                        .with_current_span(true)
+                        .with_span_list(true)
+                        .with_target(true),
+                )
+                .init();
+        }
+        crate::logging::LogFormat::Logfmt | crate::logging::LogFormat::Compact => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(tracing_subscriber::fmt::layer().compact().with_target(true))
+                .init();
+        }
+        crate::logging::LogFormat::Pretty => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(tracing_subscriber::fmt::layer().pretty().with_target(true))
+                .init();
+        }
     }
-        .with(build_env_filter(&config.rust_log))
 
     tracing::info!(rust_log = %config.rust_log, "SoroScope Starting...");
     tracing::info!("SoroScope initialized with config: {:?}", config);
@@ -2349,10 +2242,21 @@ async fn main() {
             request_timeout: std::time::Duration::from_secs(30),
         };
 
+        let metrics = Arc::new(AppMetrics::new().expect("Failed to initialize Prometheus metrics"));
+        let leader_redis_client = redis::Client::open(config.redis_url.as_str())
+            .expect("Failed to create Redis client for leader lock");
+        let leader_lock = Arc::new(leader_lock::RedisLeaderLock::new(
+            leader_redis_client,
+            "soroscope:leader:fee_collector",
+            std::time::Duration::from_secs(30),
+        ));
+
         let collector = Arc::new(FeeCollector::new(
             Arc::clone(&registry),
             Arc::clone(&fee_store),
             collector_config,
+            metrics,
+            leader_lock,
         ));
 
         let total = end - start + 1;
@@ -2479,7 +2383,7 @@ async fn main() {
     let simulation_bus = SimulationBus::with_capacity(config.event_bus_capacity);
 
     // Spawn background cleanup task
-    job_queue.spawn_cleanup_task();
+    worker_handles.push(job_queue.spawn_cleanup_task(shutdown_tx.subscribe()));
 
     let job_worker = JobWorker::new(
         job_queue.clone(),
@@ -2497,20 +2401,6 @@ async fn main() {
     worker_handles.push(tokio::spawn(async move {
         job_worker.run(bus_worker_shutdown).await;
     }));
-
-    // ── Distributed Job Queue Setup ─────────────────────────────────────
-    let job_config = JobQueueConfig {
-        job_timeout_secs: config.job_timeout_secs,
-        max_concurrent_jobs: config.max_concurrent_jobs,
-        ..Default::default()
-    };
-
-    let job_queue = JobQueue::new(&config.database_url, &config.redis_url, job_config.clone())
-        .await
-        .expect("Failed to initialize JobQueue");
-
-    // Spawn background cleanup task
-    worker_handles.push(job_queue.spawn_cleanup_task(shutdown_tx.subscribe()));
 
     // Periodically sample Redis job-queue depth into the `job_queue_depth` gauge.
     let depth_queue = job_queue.clone();
@@ -2532,19 +2422,6 @@ async fn main() {
             }
         }
     });
-
-    // Spawn worker
-    let worker = JobWorker::new(
-        job_queue.clone(),
-        SimulationEngine::with_registry_and_timeout(Arc::clone(&registry), simulation_timeout),
-        InsightsEngine::new(),
-        job_config,
-    );
-
-    let worker_shutdown = shutdown_tx.subscribe();
-    worker_handles.push(tokio::spawn(async move {
-        worker.run(worker_shutdown).await;
-    }));
 
     tracing::info!("Job queue and worker started (Redis backend)");
 
@@ -2640,7 +2517,6 @@ async fn main() {
         fee_analytics_engine,
         fee_store,
         metrics: Arc::clone(&app_metrics),
-        metrics,
         simulation_bus,
     });
 
@@ -2674,8 +2550,6 @@ async fn main() {
     let graphql_schema =
         graphql::build_schema(app_state.job_queue.clone(), app_state.engine.clone());
 
-    let cors = CorsLayer::new().allow_origin(Any);
-    let cors = soroscope_core::cors::build_cors_layer(&config.cors_allowed_origins);
     let cors = {
         let raw = config.allowed_origins.trim().to_string();
         if raw.is_empty() {
@@ -2689,6 +2563,7 @@ async fn main() {
                 .filter_map(|s| s.trim().parse::<HeaderValue>().ok())
                 .collect();
             CorsLayer::new().allow_origin(origins)
+        }
     };
 
     let protected = Router::new()
@@ -2788,19 +2663,12 @@ async fn main() {
 async fn shutdown_signal(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
+            .await
             .expect("failed to install Ctrl+C handler");
     };
 
     #[cfg(unix)]
     let terminate = async {
-        .with_graceful_shutdown(shutdown_signal())
-
-    tracing::info!("Server shut down gracefully.");
-
-/// Waits for SIGTERM (Unix) or Ctrl-C (all platforms) and resolves once either
-/// signal is received, allowing axum to finish in-flight requests before exit.
-async fn shutdown_signal() {
-    let sigterm = async {
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("failed to install SIGTERM handler")
             .recv()
@@ -2811,12 +2679,17 @@ async fn shutdown_signal() {
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
+        _ = ctrl_c => {
+            tracing::info!("Received SIGINT (Ctrl-C), shutting down…");
+        },
+        _ = terminate => {
+            tracing::info!("Received SIGTERM, shutting down…");
+        },
     }
 
     tracing::info!("Shutdown signal received; notifying background workers");
     let _ = shutdown_tx.send(());
+}
 
 /// Await every worker handle, aborting any that hang past a short grace period.
 async fn join_worker_handles(handles: Vec<tokio::task::JoinHandle<()>>) {
@@ -2834,12 +2707,7 @@ async fn join_worker_handles(handles: Vec<tokio::task::JoinHandle<()>>) {
                     "Background worker did not exit within {:?}; aborted",
                     WORKER_JOIN_TIMEOUT
                 );
-    let sigterm = std::future::pending::<()>();
-
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("Received SIGINT (Ctrl-C), shutting down…");
-        _ = sigterm => {
-            tracing::info!("Received SIGTERM, shutting down…");
+            }
         }
     }
 }
@@ -3201,5 +3069,3 @@ async fn analyze_simulation(
     let result = simulation_service.record_and_analyze(metric).await?;
     Ok(Json(result))
 }
-
-```

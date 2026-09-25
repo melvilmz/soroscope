@@ -1,20 +1,22 @@
 #[path = "../src/merkle_tree.rs"]
 mod merkle_tree;
 
-use merkle_tree::{MerkleError, MerkleTree};
+use merkle_tree::MerkleTree;
 
 #[test]
 fn test_merkle() {
-    let leaves = vec![[0u8;32], [1u8;32], [2u8;32], [3u8;32]];
-    let tree = MerkleTree::new(leaves).unwrap();
-    assert_eq!(tree.len(), 4);
+    let leaves = vec![vec![0u8; 32], vec![1u8; 32], vec![2u8; 32], vec![3u8; 32]];
+    let mut tree = MerkleTree::new(4);
+    tree.build(leaves).unwrap();
+    assert_eq!(tree.leaf_count(), 4);
     for i in 0..4 {
         let proof = tree.generate_proof(i).unwrap();
-        assert!(MerkleTree::verify_proof(&proof));
+        assert!(MerkleTree::verify_proof(&proof, &tree.root()));
     }
 }
 
 #[test]
 fn test_empty() {
-    assert_eq!(MerkleTree::new(vec[]), Erp(MerkleError::EmptyTree));
+    let mut tree = MerkleTree::new(4);
+    assert!(tree.build(vec![]).is_err());
 }

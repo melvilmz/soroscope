@@ -5,7 +5,6 @@ use ed25519_dalek::Signer as Ed25519Signer;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use soroban_sdk::testutils::Ledger;
 use soroban_sdk::xdr::{
     AccountId, DiagnosticEvent, Hash, HashIdPreimage, HashIdPreimageSorobanAuthorization,
     HostFunction, InvokeContractArgs, InvokeHostFunctionOp, LedgerEntry, LedgerKey,

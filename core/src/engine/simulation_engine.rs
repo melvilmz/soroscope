@@ -4,6 +4,7 @@ use crate::simulation::{SimulationResult, SimulationError, SorobanResources};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use soroban_sdk::xdr::{Limits, SorobanTransactionData, ReadXdr};
 
+#[allow(dead_code)]
 pub struct SimulationEngine<P, C, R> {
     provider: P,
     cache: C,
